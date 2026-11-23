@@ -71,7 +71,10 @@ def _public_state(st: dict) -> dict:
                                                               "timings")},
                                     "chunks": [{k: c.get(k) for k in ("title", "section", "content", "collection", "source",
                                                                       "rerank_score", "dense_rank", "bm25_rank", "rrf",
-                                                                      "low_relevance")} for c in d.get("chunks", [])]},
+                                                                      "low_relevance")}
+                                              | {"page": (c.get("metadata") or {}).get("page"),
+                                                 "doc_type": (c.get("metadata") or {}).get("doc_type")}
+                                              for c in d.get("chunks", [])]},
         "grounding": st.get("grounding"),
         "trace": st.get("trace", []),
     }
@@ -139,8 +142,10 @@ def handle(question: str, student_id: str | None, history: list[dict] | None, us
     except Exception as e:  # never leak stack traces to the client, but always log them server-side
         log.exception("request failed: %r", question[:120])
         _log(blocked="error", latency_ms=int((time.time() - t0) * 1000))
-        yield {"type": "error", "message": f"Something went wrong ({type(e).__name__}). Please try again.",
-               "debug": str(e)[:300]}
+        limited = "RateLimit" in type(e).__name__ or "429" in str(e)[:400]
+        yield {"type": "error", "message": (
+            "The AI service is at its usage limit right now. Please try again in a few minutes." if limited
+            else f"Something went wrong ({type(e).__name__}). Please try again.")}
 
 
 def metrics() -> dict:

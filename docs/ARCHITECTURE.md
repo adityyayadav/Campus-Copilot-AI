@@ -29,6 +29,34 @@ A LangGraph agent that reads a question, **routes** it to the live database, the
 | **Access roles** | Admin (Registrar: all records) · student (own records only) · guest (public only), enforced by Postgres row-level security via per-transaction `app.role` / `app.student_id`, plus the SQL and authorization guards |
 | **UI** | React (Vite) + FastAPI Server-Sent Events. `/` is a clean student-facing chat (history, plain-language sources). `/console` is the developer console: live pipeline, inspector (Routing · SQL · Sources · Trust · Cost), Insights dashboard |
 
+## 2c. Scalability
+
+| Concern | Implementation |
+|---|---|
+| **Stateless app tier** | No server-side sessions; chat history lives in the browser and all shared state (data, vectors, cache, logs) in PostgreSQL, so you can run N uvicorn workers or containers behind a load balancer |
+| **Connection pooling** | `psycopg_pool` per process: an admin pool and a read-only pool (max 10 each, configurable). Security settings are transaction-local, so pooled connections never leak a role |
+| **Bounded concurrency** | A fixed worker pool runs AI pipelines (`MAX_CONCURRENT_CHATS=8`) with a bounded queue (`MAX_QUEUED_CHATS=32`); beyond that the API sheds load with HTTP 503 + `Retry-After` instead of piling up threads and provider calls |
+| **Indexes** | HNSW (vectors), GIN (metadata), BM25 term index, plus B-tree indexes on every foreign key and filter column (fees by student, enrollments by course, grants by status/deadline) |
+| **Cost/latency at scale** | Semantic cache (0.35 s, 0 LLM calls on repeats), embedding reuse, tier-1 routing without an LLM, small model for routing |
+| **Measured** | 2 workers, DB-backed endpoints: 50 concurrent clients, 1,000 requests, 284 req/s, 0 errors, DB connections capped at 16 |
+| **Next step for production** | Move the per-process rate limiter and embedding LRU to Redis; managed Postgres with read replicas; paid LLM/embedding tiers for higher provider limits |
+
+## 2d. Citations (end-user UI)
+Answers carry numbered citation chips. Hovering shows a preview; clicking opens a side panel with the cited passage and the full policy document, scrolled to and highlighting the cited section (served by `GET /api/documents/{name}`, which only serves documents that are actually indexed), or the exact database records used, read with the user's permissions.
+
+## 2e. Evidence explorer (PDF sources)
+Policies can be Markdown or **PDF**. PDFs are chunked by their numbered section headings with the **page number** kept in metadata
+(an optional `<name>.meta.json` sidecar adds topic, owner and effective date). Clicking a PDF citation opens a resizable
+**split screen**: the original PDF rendered with PDF.js, scrolled to the cited page, with the exact cited lines highlighted
+(text-layer matching against the stored chunk). The file is served by `GET /api/documents/{name}/file`, allow-listed to indexed documents.
+
+## 2f. Live pipeline monitor
+Every pipeline event of every request is summarised (privacy-safe: masked IDs, truncated SQL) and published with
+**PostgreSQL NOTIFY** on channel `campus_live`. Each server process runs one LISTEN thread, keeps a 200-event history and
+fans events out to subscribers; `GET /api/live` streams them as Server-Sent Events. The console's **Live** tab shows each
+question moving through guardrails, cache, router, retrieval, SQL, synthesis and verification in real time, across all
+uvicorn workers. Publish/subscribe means the pipeline never waits for the monitor.
+
 ## 3. Tech stack
 
 | Layer | Choice | Why |

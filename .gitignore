@@ -6,3 +6,4 @@ __pycache__/
 eval/results_*.json
 web/node_modules/
 web/dist/
+.claude

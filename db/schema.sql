@@ -154,3 +154,21 @@ COMMENT ON TABLE scholarships IS 'Scholarship schemes with amounts and deadlines
 COMMENT ON COLUMN scholarships.category IS 'MERIT, NEED_BASED, SPORTS or WOMEN_IN_STEM';
 COMMENT ON COLUMN scholarships.amount IS 'Annual amount in INR';
 COMMENT ON COLUMN scholarships.status IS 'OPEN or CLOSED';
+
+-- =====================================================================
+-- Indexes on every foreign key / common filter, so per-student and per-course
+-- lookups stay index scans as the university grows (RLS filters on student_id too).
+-- =====================================================================
+CREATE INDEX idx_students_dept_year      ON students (dept_id, year);
+CREATE INDEX idx_faculty_dept            ON faculty (dept_id);
+CREATE INDEX idx_courses_dept_term       ON courses (dept_id, term);
+CREATE INDEX idx_enrollments_course_term ON enrollments (course_id, term);
+CREATE INDEX idx_timetable_course        ON timetable (course_id);
+CREATE INDEX idx_timetable_faculty       ON timetable (faculty_id);
+CREATE INDEX idx_exams_course            ON exams (course_id);
+CREATE INDEX idx_fee_ledger_student_term ON fee_ledger (student_id, term);
+CREATE INDEX idx_fee_ledger_status_due   ON fee_ledger (status, due_date);
+CREATE INDEX idx_grants_status_deadline  ON research_grants (status, deadline);
+CREATE INDEX idx_grant_apps_student      ON grant_applications (student_id);
+CREATE INDEX idx_grant_apps_grant        ON grant_applications (grant_id);
+CREATE INDEX idx_scholarships_status     ON scholarships (status, deadline);

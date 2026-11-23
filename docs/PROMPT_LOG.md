@@ -66,6 +66,24 @@ Format per entry: **phase · tool/model · prompt · outcome / decision taken**.
   - Follow-up questions after a long answer were rejected (HTTP 422). Fix: history is clipped instead of rejected; failures are now logged.
   - Requirements pinned to the tested versions.
 
+### P7: Claude-style citations + scalability
+- **Prompt:** "in project give citation docs display n all non ai enterprise clean professional like claude, make sure the system is scalable"
+- **Outcome:**
+  - Inline numbered citation chips (hover preview, click to open), a numbered sources strip, and a side panel showing the cited passage + full document scrolled to the highlighted section, or the exact records used. New allow-listed endpoint `GET /api/documents/{name}` (path-traversal attempts never reach a file).
+  - The answer prompt now requires exact `[SQL]` / `[D1]` citations; the UI parser also handles ranges like "(see D1–D6)", so internal IDs never leak.
+  - Scalability: psycopg connection pools, a bounded worker pool + queue with 503 load shedding, 13 B-tree indexes, multi-worker deployment. Load test: 50 concurrent clients, 1,000 requests, 284 req/s, 0 errors, DB connections capped at 16.
+
+### P8: Neutral UI colors + 10-slide deck
+- **Prompts:** "u havent changed the ui i want professional like a production level ui … not too generic blue purple"; "no i want professional color grading like chatgpt claude use near solid colors"; "i want background same as ppt given just change the diagrams and text, keep techstack something in middle".
+- **Outcome:** both UIs moved to a neutral, near-solid palette (white/greys/near-black; color only for status). Built `presentation/Campus-Copilot-AI.pptx` (10 slides) with pptxgenjs, reusing the reference deck's backgrounds/artwork (sponsor logo excluded), native diagrams, real product screenshots captured with headless Edge, speaker notes; QA'd by rendering every slide through PowerPoint.
+
+### P9: PDF evidence explorer + live pipeline monitor
+- **Prompt:** "also add the pdf data source also and for citation open that pdf highlighting the source — Split-Screen Evidence Explorer like citations. in console dashboard we can show the actual routing like live … is it hard to implement or explain … first tell me"; then "yeah go ahead … do the first 2 things".
+- **Outcome:**
+  - New PDF policy (Training & Placement Policy, printed to PDF), PDF chunking by section with page numbers, sidecar metadata, raw-file endpoint; citations open a resizable split screen with PDF.js, scrolled to the page with the cited lines highlighted.
+  - Live monitor: PostgreSQL NOTIFY/LISTEN event bus + `/api/live` SSE + console "Live" tab showing each request's stages, timings, routing votes, sources, SQL and verification in real time (works across workers).
+  - Verified: "Am I eligible to register for campus placements this year?" (S1023) → HYBRID · sequential, answer "No: placements need 4th year" cited to PDF page 1 with highlighted lines; the Live tab showed every stage as it ran.
+
 ## Phase 2: Code Generation
 
 _(add entries as we go)_

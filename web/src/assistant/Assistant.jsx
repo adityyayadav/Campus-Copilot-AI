@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  ArrowUp, Check, ChevronDown, Copy, FileText, GraduationCap, Menu, MessageSquare, PenSquare, Square, Table2, X,
+  ArrowUp, Check, ChevronDown, Copy, GraduationCap, Menu, MessageSquare, PenSquare, Square, X,
 } from 'lucide-react'
 import { getJSON, streamChat } from '../api.js'
+import { CitationChip, SourceList, SourcePanel, useCitations } from './citations.jsx'
 import './assistant.css'
 
 const STORE_KEY = 'campus-copilot-chats-v1'
@@ -66,28 +67,6 @@ function cleanAnswer(text) {
     .replace(/【[^】]*】/g, '')
 }
 
-/** Friendly, de-duplicated list of what the answer was based on. */
-function sourcesOf(data) {
-  if (!data) return []
-  const out = []
-  if (data.sql && !data.sql.error && data.sql.rows?.length) {
-    out.push({ kind: 'records', title: 'University records', detail: 'Live data from the student information system' })
-  }
-  const seen = new Set()
-  for (const c of data.docs?.chunks || []) {
-    if (c.collection === 'table_rows') {
-      if (!out.some((s) => s.kind === 'records')) out.push({ kind: 'records', title: 'University records', detail: 'Catalogue of grants, scholarships and courses' })
-      continue
-    }
-    const section = (c.section || '').split(' > ')[0].replace(/^\d+\.\s*/, '')
-    const key = `${c.title}|${section}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ kind: 'policy', title: c.title, detail: section })
-  }
-  return out.slice(0, 5)
-}
-
 function statusFrom(events) {
   const { route, strategy, node } = events
   if (node === 'synthesize') return STATUS.verifying
@@ -112,6 +91,14 @@ export default function Assistant() {
   const [busy, setBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [panel, setPanelState] = useState(null)
+  const [panelW, setPanelW] = useState(460)
+  // PDFs open as a wide split screen; other sources as a side panel
+  const setPanel = (src) => {
+    setPanelState(src)
+    if (src) setPanelW(src.isPdf ? Math.round(Math.max(560, window.innerWidth * 0.46)) : 460)
+  }
+  const resizePanel = (w) => setPanelW(Math.max(360, Math.min(w, Math.round(window.innerWidth * 0.72))))
   const abortRef = useRef(null)
   const scrollRef = useRef(null)
 
@@ -139,6 +126,7 @@ export default function Assistant() {
     abortRef.current?.abort()
     setActiveId(null)
     setSidebarOpen(false)
+    setPanel(null)
   }
 
   function switchUser(id) {
@@ -146,6 +134,7 @@ export default function Assistant() {
     setUserId(id)
     setActiveId(null)
     setAccountOpen(false)
+    setPanel(null)
   }
 
   async function send(text) {
@@ -202,7 +191,7 @@ export default function Assistant() {
   }
 
   return (
-    <div className="ca">
+    <div className={`ca ${panel ? 'with-panel' : ''}`} style={panel ? { '--panel-w': `${panelW}px` } : undefined}>
       <aside className={`ca-side ${sidebarOpen ? 'open' : ''}`}>
         <div className="ca-side-top">
           <div className="ca-brand">
@@ -269,13 +258,14 @@ export default function Assistant() {
             <div className="ca-thread">
               {active.messages.map((m) => (m.role === 'user'
                 ? <div key={m.id} className="ca-user"><div className="ca-user-bubble">{m.content}</div></div>
-                : <AssistantMessage key={m.id} m={m} />))}
+                : <AssistantMessage key={m.id} m={m} onOpenSource={setPanel} />))}
             </div>
           )}
         </div>
 
         <Composer onSend={send} onStop={stop} busy={busy} profile={profile} />
       </main>
+      {panel && <SourcePanel source={panel} onClose={() => setPanel(null)} onResize={resizePanel} />}
     </div>
   )
 }
@@ -294,14 +284,21 @@ function Welcome({ profile, onPick }) {
   )
 }
 
-function AssistantMessage({ m }) {
+function AssistantMessage({ m, onOpenSource }) {
   const [copied, setCopied] = useState(false)
-  const [showSources, setShowSources] = useState(false)
-  const sources = sourcesOf(m.data)
-  const text = cleanAnswer(m.answer)
+  const { text, sources, inline } = useCitations(m.answer, m.data)
+  const components = useMemo(() => ({
+    a: ({ href, children }) => {
+      if (href?.startsWith('#cite-')) {
+        const n = Number(href.slice(6))
+        return <CitationChip n={n} source={sources[n - 1]} onOpen={onOpenSource} />
+      }
+      return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+    },
+  }), [sources, onOpenSource])
 
   function copy() {
-    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+    navigator.clipboard?.writeText(cleanAnswer(m.answer)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
   }
 
   return (
@@ -314,26 +311,11 @@ function AssistantMessage({ m }) {
           <div className="ca-notice">{m.answer}</div>
         ) : (
           <>
-            <div className="ca-md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>
+            <div className="ca-md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{text}</ReactMarkdown></div>
+            <SourceList sources={sources} inline={inline} onOpen={onOpenSource} />
             <div className="ca-actions">
               <button className="ca-act" onClick={copy} aria-label="Copy answer">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy'}</button>
-              {sources.length > 0 && (
-                <button className="ca-act" onClick={() => setShowSources((v) => !v)} aria-expanded={showSources}>
-                  <FileText size={14} /> {sources.length} source{sources.length > 1 ? 's' : ''}
-                  <ChevronDown size={13} className={showSources ? 'rot' : ''} />
-                </button>
-              )}
             </div>
-            {showSources && (
-              <ul className="ca-sources">
-                {sources.map((s, i) => (
-                  <li key={i}>
-                    {s.kind === 'records' ? <Table2 size={15} /> : <FileText size={15} />}
-                    <span><b>{s.title}</b>{s.detail ? <span className="ca-src-detail"> · {s.detail}</span> : null}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
           </>
         )}
       </div>

@@ -1,8 +1,12 @@
 """FastAPI backend.   Run:  uvicorn src.api:app --port 8000
 Serves the API under /api and the built React app (web/dist) at /."""
+import asyncio
 import json
 import queue
 import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,15 +14,24 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import config
-from .db import admin_conn
+from . import config, live
+from .chunking import _front_matter
+from .db import admin_conn, pool_stats
 from .service import handle, metrics
 
 app = FastAPI(title="Campus Copilot AI", version="1.0.0")
+live.ensure_listener()  # each server process listens for live pipeline events from all workers
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
 
 PERSONAS = ("S1023", "S1045")  # demo students; plus the admin account and guest
+
+# Bounded concurrency: a fixed pool runs the AI pipelines; a bounded queue absorbs bursts; beyond that we shed load
+# with HTTP 503 instead of letting threads, DB connections and provider rate limits pile up.
+_executor = ThreadPoolExecutor(max_workers=config.MAX_CONCURRENT_CHATS, thread_name_prefix="chat")
+_slots = threading.BoundedSemaphore(config.MAX_CONCURRENT_CHATS + config.MAX_QUEUED_CHATS)
+_inflight = {"n": 0}
+_inflight_lock = threading.Lock()
 
 
 class Turn(BaseModel):
@@ -58,6 +71,8 @@ def health():
     except Exception as e:
         n, db = 0, f"error: {type(e).__name__}"
     return {"db": db, "indexed_chunks": n,
+            "capacity": {"max_concurrent_chats": config.MAX_CONCURRENT_CHATS, "max_queued": config.MAX_QUEUED_CHATS,
+                         "inflight": _inflight["n"], "db_pools": pool_stats()},
             "llm": {"provider": "groq", "main": config.MAIN_MODEL, "router": config.ROUTER_MODEL,
                     "fallback": f"gemini:{config.GEMINI_CHAT_MODEL}" if config.GOOGLE_API_KEY else None,
                     "configured": bool(config.GROQ_API_KEY)},
@@ -86,26 +101,105 @@ def get_metrics():
     return metrics()
 
 
+@app.get("/api/documents/{name}")
+def document(name: str):
+    """Full text of an indexed policy document, for the citation viewer. Only files that are actually in the
+    index can be read (allow-list from the database), so arbitrary paths are impossible."""
+    allowed = _indexed_documents()
+    if name not in allowed:
+        return JSONResponse(status_code=404, content={"error": "document not found"})
+    path = config.DOCS_DIR / name
+    if path.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+        body = "\n\n".join((p.extract_text() or "") for p in PdfReader(str(path)).pages)
+        side = path.with_suffix(".meta.json")
+        meta = json.loads(side.read_text(encoding="utf-8")) if side.exists() else {}
+    else:
+        meta, body = _front_matter(path.read_text(encoding="utf-8"))
+    return {"source": name, "title": allowed[name], "meta": meta, "markdown": body.strip()}
+
+
+@app.get("/api/documents/{name}/file")
+def document_file(name: str):
+    """The original document file (used by the PDF evidence viewer). Same allow-list as above."""
+    if name not in _indexed_documents():
+        return JSONResponse(status_code=404, content={"error": "document not found"})
+    path = config.DOCS_DIR / name
+    media = "application/pdf" if path.suffix.lower() == ".pdf" else "text/markdown; charset=utf-8"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=3600",
+                                                         "Content-Disposition": f'inline; filename="{name}"'})
+
+
+@lru_cache(maxsize=1)
+def _indexed_documents() -> dict[str, str]:
+    with admin_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT source, title FROM rag.chunks WHERE collection = 'docs'").fetchall()
+    return {r["source"]: r["title"] for r in rows}
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, request: Request):
     client = request.client.host if request.client else "unknown"
+    if not _slots.acquire(blocking=False):
+        return JSONResponse(status_code=503, headers={"Retry-After": "5"},
+                            content={"detail": "The assistant is busy right now. Please try again in a few seconds."})
     q: queue.Queue = queue.Queue()
+    req_id = uuid.uuid4().hex[:8]
+    role = "admin" if req.student_id == "ADMIN" else "student" if req.student_id else "guest"
 
-    def worker():  # one thread per request so per-request usage metering stays in one context
+    def worker():  # runs on the bounded pool; per-request usage metering stays in this thread's context
+        with _inflight_lock:
+            _inflight["n"] += 1
         try:
+            live.request_started(req_id, req.question, req.student_id, role)
             for ev in handle(req.question, req.student_id, [t.model_dump() for t in req.history],
                              req.use_hyde, req.use_rerank, client):
                 q.put(ev)
+                live.publish(req_id, live.summarize(ev))  # broadcast to the live monitor
         finally:
+            with _inflight_lock:
+                _inflight["n"] -= 1
+            _slots.release()
             q.put(None)
 
-    threading.Thread(target=worker, daemon=True).start()
+    _executor.submit(worker)
 
     def stream():
         while (ev := q.get()) is not None:
             yield f"data: {json.dumps(ev, default=str)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/live")
+async def live_stream(request: Request):
+    """Server-Sent Events feed of every request's pipeline steps (developer console 'Live' tab).
+    Async + polling a per-subscriber buffer, so watchers never tie up the worker thread pool."""
+    live.ensure_listener()
+    sub = live.subscribe()
+    backlog = list(live.HISTORY)[-150:]
+
+    async def gen():
+        try:
+            yield "retry: 3000\n\n"
+            for ev in backlog:
+                yield f"data: {json.dumps({**ev, 'replay': True}, default=str)}\n\n"
+            idle = 0
+            while not await request.is_disconnected():
+                sent = False
+                while sub:
+                    yield f"data: {json.dumps(sub.popleft(), default=str)}\n\n"
+                    sent = True
+                idle = 0 if sent else idle + 1
+                if idle >= 60:  # ~15 s keep-alive comment so proxies keep the stream open
+                    idle = 0
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(0.25)
+        finally:
+            live.unsubscribe(sub)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 

@@ -194,12 +194,15 @@ def grounding_node(state: State) -> dict:
     bad = unsupported_numbers(answer, state)
     result = {"status": "grounded", "checked_numbers": len(_NUM.findall(_CITE.sub("", answer))), "unsupported": bad}
     if bad:
-        revised, _ = chat(prompts.SYNTH_SYSTEM.format(today=dt.date.today().strftime("%d %B %Y")),
-                          prompts.GROUNDING_REVISE_USER.format(answer=answer, unsupported=", ".join(bad))
-                          + "\n\nEvidence:\n" + _sql_block(state.get("sql_result")) + "\n\n" + _doc_block(state.get("doc_result")),
-                          role="synth")
-        answer = revised
-        result.update(status="revised", derived_after_revision=unsupported_numbers(revised, state))
+        try:
+            revised, _ = chat(prompts.SYNTH_SYSTEM.format(today=dt.date.today().strftime("%d %B %Y")),
+                              prompts.GROUNDING_REVISE_USER.format(answer=answer, unsupported=", ".join(bad))
+                              + "\n\nEvidence:\n" + _sql_block(state.get("sql_result")) + "\n\n" + _doc_block(state.get("doc_result")),
+                              role="synth")
+            answer = revised.replace("【", "[").replace("】", "]")
+            result.update(status="revised", derived_after_revision=unsupported_numbers(answer, state))
+        except Exception as e:  # noqa: BLE001  a failed revision must not lose a good-enough answer
+            result.update(status="unverified", revision_error=type(e).__name__)
     return {"answer": answer, "grounding": result,
             "trace": [{"node": "grounding", "ms": int((time.time() - t0) * 1000), "output": result}]}
 

@@ -78,27 +78,45 @@ def chunk_markdown(path: Path) -> list[dict]:
     return out
 
 
+_PDF_HEADING = re.compile(r"^\d+(?:\.\d+)*\.?\s+[A-Z][^.]{2,80}$")
+
+
 def chunk_pdf(path: Path) -> list[dict]:
+    """PDF chunking that keeps the page number (for the evidence viewer) and the numbered section heading.
+    Optional sidecar <name>.meta.json supplies topic / doc_type / owner like markdown front matter."""
+    import json
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
-    out = []
+    meta_file = path.with_suffix(".meta.json")
+    meta = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
+    title = meta.pop("title", None) or (reader.metadata or {}).get("/Title") or path.stem.replace("_", " ").title()
+
+    pieces = []  # (page, section, text)
+    section = "Overview"
     for pno, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
         buf = ""
-        for block in _blocks(text) or [text]:
-            if buf and len(buf) + len(block) > MAX_CHARS:
-                out.append((pno, buf))
+        for line in (page.extract_text() or "").splitlines():
+            line = line.strip()
+            if not line or line == title:
+                continue
+            if _PDF_HEADING.match(line):
+                if buf:
+                    pieces.append((pno, section, buf))
+                section, buf = line, ""
+                continue
+            if buf and len(buf) + len(line) > MAX_CHARS:
+                pieces.append((pno, section, buf))
                 buf = ""
-            buf = f"{buf}\n\n{block}" if buf else block
+            buf = f"{buf}\n{line}" if buf else line
         if buf:
-            out.append((pno, buf))
-    title = path.stem.replace("_", " ").title()
+            pieces.append((pno, section, buf))
+
     return [{
-        "collection": "docs", "source": path.name, "title": title, "section": f"Page {p}",
-        "content": c, "embed_text": f"Document: {title}\nPage {p}\n\n{c}",
-        "metadata": {"doc_type": "pdf", "page": p, "chunk_index": i},
-    } for i, (p, c) in enumerate(out)]
+        "collection": "docs", "source": path.name, "title": title, "section": sec,
+        "content": text, "embed_text": f"Document: {title}\nSection: {sec}\nPage {p}\n\n{text}",
+        "metadata": {"doc_type": "pdf", **meta, "page": p, "chunk_index": i},
+    } for i, (p, sec, text) in enumerate(pieces)]
 
 
 def chunk_file(path: Path) -> list[dict]:

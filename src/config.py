@@ -60,6 +60,12 @@ SQL_ROW_LIMIT = 50
 ROUTER_FAST_CONFIDENCE = float(_get("ROUTER_FAST_CONFIDENCE", "0.75"))
 ROUTER_LLM_MIN_CONFIDENCE = float(_get("ROUTER_LLM_MIN_CONFIDENCE", "0.55"))  # below -> HYBRID fallback
 
+# Scalability: bounded resources per server process (run several processes with --workers N behind one DB)
+DB_POOL_MAX = int(_get("DB_POOL_MAX", "10"))             # max DB connections per pool, per process
+DB_POOL_TIMEOUT_S = float(_get("DB_POOL_TIMEOUT_S", "10"))
+MAX_CONCURRENT_CHATS = int(_get("MAX_CONCURRENT_CHATS", "8"))   # pipelines running at once, per process
+MAX_QUEUED_CHATS = int(_get("MAX_QUEUED_CHATS", "32"))         # beyond this -> HTTP 503 "busy, retry"
+
 # Guardrails
 MAX_QUESTION_CHARS = 1000
 INJECTION_THRESHOLD = float(_get("INJECTION_THRESHOLD", "0.80"))

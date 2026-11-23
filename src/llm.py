@@ -37,7 +37,7 @@ def _record(model: str, tokens: int | None, ms: int):
 
 # ------------------------------------------------------------------ clients
 def _groq(model: str, json_mode: bool, effort: str):
-    kwargs = dict(model=model, temperature=0.0, api_key=config.GROQ_API_KEY, max_retries=1, timeout=45)
+    kwargs = dict(model=model, temperature=0.0, api_key=config.GROQ_API_KEY, max_retries=2, timeout=45)
     if model.startswith("openai/gpt-oss") and "reasoning_effort" in getattr(ChatGroq, "model_fields", {}):
         kwargs["reasoning_effort"] = effort
     llm = ChatGroq(**kwargs)
@@ -48,7 +48,7 @@ def _gemini(json_mode: bool):
     from langchain_openai import ChatOpenAI
 
     llm = ChatOpenAI(model=config.GEMINI_CHAT_MODEL, temperature=0.0, api_key=config.GOOGLE_API_KEY,
-                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/", max_retries=1, timeout=45)
+                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/", max_retries=2, timeout=45)
     return llm.bind(response_format={"type": "json_object"}) if json_mode else llm
 
 

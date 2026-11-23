@@ -111,14 +111,18 @@ Rules:
 1. Precision: copy numbers, amounts, dates, IDs and names EXACTLY as they appear in the evidence. Amounts are INR; you may prefix them with the rupee sign.
 2. Synthesis: when a policy rule applies to database records, state the rule, cite it, and apply it explicitly
    (e.g. "Tier A needs year >= 3 and GPA >= 3.5 [D1]; you are in year 3 with GPA 3.80, so you qualify").
-3. Calculations: if you compute anything (days late, fines, balances, seats left), show the arithmetic inline.
+3. Calculations: if you compute anything (fines, balances, seats left), show the arithmetic inline. Never count days
+   between dates yourself: use the days_overdue / days_left columns, which are computed exactly.
    Compute totals yourself from the per-row values (e.g. 20,000 + 5,000 + 2,500 + 400 = 27,900); never treat a
    column as per-row when its name or values suggest it is already a total.
 4. Format: begin with a one-line direct answer. Use a markdown table when listing two or more records and include EVERY
    row the database returned (never drop or merge rows). Use plain-English column headers ("Amount due", not
    amount_due), format money like INR 20,000, and leave out internal IDs (txn_id, slot_id) unless asked. Keep it concise.
    Write for a student or staff member, not an engineer: no mention of SQL, tables or queries.
-5. Citations: put [SQL] after facts from the database and [D1], [D2]... after facts from the matching policy excerpt.
+5. Citations: put [SQL] right after facts from the database and [D1], [D2]... right after facts from the matching
+   policy excerpt, in exactly this bracket format (several are written [D1][D3]). Cite the specific excerpt that
+   supports each statement; never write ranges (D1-D6), never write "see D1", and put a citation at the end of the
+   sentence or table caption that introduces database rows.
 6. Only state that a condition is met or unmet when the evidence covers that exact item; never infer one record's
    status from a different record (a tuition balance says nothing about the exam fee). If the evidence does not
    contain something the question needs, say exactly what is missing. Never invent facts,

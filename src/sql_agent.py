@@ -102,6 +102,24 @@ def _jsonable(v):
     return v
 
 
+def add_date_math(cols: list[str], rows: list[dict]) -> tuple[list[str], list[dict]]:
+    """LLMs miscount days between dates, so day counts are computed here exactly:
+    due_date -> days_overdue (0 if not yet due), deadline / exam_date -> days_left."""
+    today = dt.date.today()
+    plan = [(src, dst) for src, dst in (("due_date", "days_overdue"), ("deadline", "days_left"), ("exam_date", "days_left"))
+            if src in cols and dst not in cols]
+    if not plan or not rows:
+        return cols, rows
+    for r in rows:
+        for src, dst in plan:
+            try:
+                d = dt.date.fromisoformat(str(r.get(src))[:10])
+            except ValueError:
+                continue
+            r[dst] = max((today - d).days, 0) if dst == "days_overdue" else (d - today).days
+    return cols + [dst for _, dst in plan if dst not in cols], rows
+
+
 def rows_to_markdown(cols: list[str], rows: list[dict], max_rows: int = 50) -> str:
     if not rows:
         return "(query returned 0 rows)"
@@ -171,6 +189,7 @@ def run_sql_agent(question: str, profile: dict | None, policy_context: str = "",
             safe_sql = guard_sql(sql, allowed, own, is_admin=role == "admin")
             cols, rows = run_readonly_query(safe_sql, own, role)
             rows = [{k: _jsonable(v) for k, v in r.items()} for r in rows]
+            cols, rows = add_date_math(cols, rows)
             sql, error = safe_sql, None
             steps.append({"step": f"generate+execute#{attempt}", "ms": meta["ms"], "rows": len(rows)})
             break

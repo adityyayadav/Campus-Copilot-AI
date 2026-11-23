@@ -33,6 +33,7 @@ EXEMPLARS = {
         "Is the examination fee refundable?",
         "What is academic probation?",
         "How are research grant funds disbursed?",
+        "What is the internship credit policy?",
     ],
     "HYBRID": [
         "Which scholarships am I eligible for and when do they close?",
@@ -49,6 +50,7 @@ EXEMPLARS = {
         "How many third-year students meet the Tier A GPA requirement?",
         "Is my attendance high enough to keep my scholarship?",
         "What exams do I have next week and what am I not allowed to bring?",
+        "Can I register for campus placements this year given my record?",
     ],
     "OUT_OF_SCOPE": [
         "Hello there",

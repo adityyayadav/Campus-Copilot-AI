@@ -109,7 +109,7 @@ def scan_documents(chunks: list[dict]) -> None:
 def main():
     t0 = time.time()
     chunks = []
-    for p in sorted(config.DOCS_DIR.glob("*")):
+    for p in sorted(x for x in config.DOCS_DIR.glob("*") if x.suffix.lower() in (".md", ".txt", ".pdf")):
         cs = chunk_file(p)
         print(f"  doc  {p.name:<32} {len(cs):>3} chunks")
         chunks += cs

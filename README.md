@@ -25,8 +25,13 @@ cd web; npm install; npm run build; cd ..             # build the React UI
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn src.api:app --port 8000
 ```
+For more traffic, run several worker processes. The app is stateless and all shared state lives in PostgreSQL:
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn src.api:app --port 8000 --workers 4
+```
 - **http://localhost:8000/** is the student-facing assistant: a clean chat UI with conversation history, sources and an account switcher.
-- **http://localhost:8000/console** is the developer console: routing decisions, generated SQL, retrieved chunks with scores, guardrail and grounding results, cost, and the Insights dashboard.
+- **http://localhost:8000/console** is the developer console: routing decisions, generated SQL, retrieved chunks with scores, guardrail and grounding results, cost, a **Live** tab that shows every question moving through the pipeline in real time, and the Insights dashboard.
+- Citations: click a numbered chip to open the source. PDF sources open in a resizable split screen, scrolled to the cited page with the lines highlighted.
 
 For UI development with hot reload, also run `cd web; npm run dev` and open http://localhost:5173.
 
@@ -38,6 +43,15 @@ For UI development with hot reload, also run `cd web; npm run dev` and open http
 | Guest | Public information only (no personal rows) |
 
 Roles are applied per query through `app.role` / `app.student_id` and Postgres row-level security, plus the guardrail and SQL checks. In production they would come from the university SSO token, not an account switcher.
+
+## Adding documents
+Put Markdown (`.md`, with a `---` front-matter block) or PDF files in `data/docs/`. A PDF can have a sidecar
+`<name>.meta.json` with `topic`, `doc_type`, `owner`, `effective_from`. Then re-run `python -m scripts.ingest`.
+
+## Free-tier limits worth knowing
+Groq's free tier allows about 200K tokens per day for `gpt-oss-120b` (rolling 24 hours). When it runs out the app falls back
+to `gpt-oss-20b` and then Gemini automatically, which is slower but still answers. Avoid long test runs right before a demo,
+and ask the demo questions once beforehand: verified answers are cached (5 min for live data, 24 h for policy answers).
 
 ## Evaluate
 ```powershell

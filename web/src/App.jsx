@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { BarChart3, GraduationCap, MessageSquare, PanelRightClose, PanelRightOpen, Plus, Sparkles } from 'lucide-react'
+import { Activity, BarChart3, GraduationCap, MessageSquare, PanelRightClose, PanelRightOpen, Plus, Sparkles } from 'lucide-react'
+import LiveMonitor from './LiveMonitor.jsx'
 import { getJSON, streamChat } from './api.js'
 import { Composer, EmptyState, MessageView } from './Chat.jsx'
 import Inspector from './Inspector.jsx'
@@ -105,6 +106,9 @@ export default function App() {
             <button className={view === 'chat' ? 'tab active' : 'tab'} onClick={() => setView('chat')}>
               <MessageSquare size={15} /> Assistant
             </button>
+            <button className={view === 'live' ? 'tab active' : 'tab'} onClick={() => setView('live')}>
+              <Activity size={15} /> Live
+            </button>
             <button className={view === 'metrics' ? 'tab active' : 'tab'} onClick={() => setView('metrics')}>
               <BarChart3 size={15} /> Insights
             </button>
@@ -136,6 +140,8 @@ export default function App() {
             </div>
             <Composer onSend={ask} busy={busy} profile={profile} />
           </>
+        ) : view === 'live' ? (
+          <div className="scroll"><LiveMonitor /></div>
         ) : (
           <div className="scroll"><Metrics /></div>
         )}
