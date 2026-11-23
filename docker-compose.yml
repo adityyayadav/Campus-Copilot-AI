@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: campus-copilot-db
+    environment:
+      POSTGRES_USER: copilot_admin
+      POSTGRES_PASSWORD: copilot_admin_pw
+      POSTGRES_DB: campus
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot_admin -d campus"]
+      interval: 3s
+      retries: 20
+
+volumes:
+  pgdata:
