@@ -23,11 +23,11 @@ A LangGraph agent that reads a question, **routes** it to the live database, the
 | **Guardrails** | Input sanitising (length, control/zero-width chars) → regex heuristics + **Llama Prompt Guard 2** (Groq-hosted) → authorization (a student can only ask about their own ID) → per-client rate limit. Documents are scanned at ingest and flagged chunks are quarantined; retrieved text is wrapped in `<document>` tags the LLM is told never to obey |
 | **SQL security** | sqlglot AST guard (single SELECT, allow-listed tables, no system functions, LIMIT) + sensitive-column rule (individual GPA/attendance/grades only for the signed-in student; aggregates allowed) + **Postgres read-only role**, **column privileges** (no emails) and **row-level security** on `fee_ledger` / `grant_applications` keyed on a per-transaction `app.student_id` |
 | **Semantic cache** | `rag.semantic_cache` in pgvector: per-user scope, cosine ≥ 0.95, identical entity signature (codes/IDs/numbers), TTL 5 min for live-data answers and 24 h for policy answers; only verified answers are stored. Cache hit ≈ 0.35 s with 0 LLM calls |
-| **Cost** | One query embedding reused by cache, router and retrieval (LRU) · tier-1 routing with no LLM call · small model for routing · schema-card retrieval instead of the full schema · low reasoning effort for synthesis · per-request token metering · telemetry in `ops.request_log` with an Insights dashboard |
+| **Cost** | One query embedding reused by cache, router and retrieval (LRU) · tier-1 routing with no LLM call · small model for routing · schema-card retrieval instead of the full schema · low reasoning effort for synthesis · per-request token metering · telemetry in `ops.request_log` |
 | **Reliability** | LLM fallback chain Groq 120b → Groq 20b → Gemini Flash-Lite · BM25-only mode if the embedding API is down · reranker failure falls back to RRF order · SQL self-repair (3 attempts) · router fallback to HYBRID |
 | **Retrieval quality** | Contextual chunk headers · hybrid dense + BM25 + RRF · Cohere rerank with relevance threshold · topic filter relaxed when the best hit is weak · **small-to-big parent-section expansion** so rule sets (Tier A/B/C) reach the SQL agent complete |
 | **Access roles** | Admin (Registrar: all records) · student (own records only) · guest (public only), enforced by Postgres row-level security via per-transaction `app.role` / `app.student_id`, plus the SQL and authorization guards |
-| **UI** | React (Vite) + FastAPI Server-Sent Events. `/` is a clean student-facing chat (history, plain-language sources). `/console` is the developer console: live pipeline, inspector (Routing · SQL · Sources · Trust · Cost), Insights dashboard |
+| **UI** | React (Vite) + FastAPI Server-Sent Events. `/` is a clean student-facing chat (history, plain-language sources, PDF evidence viewer) |
 
 ## 2c. Scalability
 
@@ -50,13 +50,6 @@ Policies can be Markdown or **PDF**. PDFs are chunked by their numbered section 
 **split screen**: the original PDF rendered with PDF.js, scrolled to the cited page, with the exact cited lines highlighted
 (text-layer matching against the stored chunk). The file is served by `GET /api/documents/{name}/file`, allow-listed to indexed documents.
 
-## 2f. Live pipeline monitor
-Every pipeline event of every request is summarised (privacy-safe: masked IDs, truncated SQL) and published with
-**PostgreSQL NOTIFY** on channel `campus_live`. Each server process runs one LISTEN thread, keeps a 200-event history and
-fans events out to subscribers; `GET /api/live` streams them as Server-Sent Events. The console's **Live** tab shows each
-question moving through guardrails, cache, router, retrieval, SQL, synthesis and verification in real time, across all
-uvicorn workers. Publish/subscribe means the pipeline never waits for the monitor.
-
 ## 3. Tech stack
 
 | Layer | Choice | Why |
@@ -70,7 +63,7 @@ uvicorn workers. Publish/subscribe means the pipeline never waits for the monito
 | Reranker | **Cohere Rerank v3.5** (or Jina) API | Cross-encoder precision; score threshold acts as a Self-RAG style relevance filter |
 | Embeddings | **Gemini `gemini-embedding-001`** (768-d) API; Cohere / Jina switchable | Free hosted, no local model |
 | SQL safety | **sqlglot** AST guard + dedicated **read-only Postgres role** + statement timeout | SELECT-only, allow-listed tables, no `rag` schema access, LIMIT enforced |
-| API + UI | **FastAPI** (SSE streaming) + **React (Vite)** | Live pipeline, inspector, metrics dashboard; one process serves API + built UI |
+| API + UI | **FastAPI** (SSE streaming) + **React (Vite)** | Streams each answer step to the chat; one process serves API + built UI |
 
 ## 4. Architecture
 
@@ -113,12 +106,12 @@ flowchart TD
 
 ## 6. Repository layout
 ```
-src/api.py             FastAPI: /api/chat (SSE), /api/metrics, /api/health, serves web/dist
+src/api.py             FastAPI: /api/chat (SSE), /api/health, serves web/dist
 src/service.py         guardrails → cache → graph → telemetry
 src/router.py          two-tier confidence router
 src/guardrails.py      input / injection / authorization / rate limit
 src/cache.py           pgvector semantic cache
-web/                   React UI (App, Chat, Inspector, Metrics)
+web/src/assistant/     React student assistant (chat, citations, PDF evidence viewer)
 src/config.py          settings from .env
 src/db.py              admin + read-only connections
 src/providers.py       embeddings + reranker APIs (Gemini / Cohere / Jina)

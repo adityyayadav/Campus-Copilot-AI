@@ -6,7 +6,15 @@ from urllib.parse import urlparse, urlunparse
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
+ENV_FILE = ROOT / ".env"
+# override=True: a key left in the shell or Windows environment must never shadow the one in .env
+load_dotenv(ENV_FILE, override=True)
+# .env is read once at startup; health reports when it has changed since (restart needed)
+ENV_LOADED_MTIME = ENV_FILE.stat().st_mtime if ENV_FILE.exists() else 0.0
+
+
+def env_changed_since_start() -> bool:
+    return ENV_FILE.exists() and ENV_FILE.stat().st_mtime > ENV_LOADED_MTIME
 
 
 def _get(name: str, default: str = "") -> str:

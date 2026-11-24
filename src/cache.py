@@ -21,9 +21,9 @@ def entity_signature(q: str) -> str:
 
 
 def lookup(question: str, scope: str) -> dict | None:
-    if not providers.embeddings_available():
+    qv = providers.embed_query(question)
+    if qv is None:
         return None
-    qv = providers.embed([question], is_query=True)[0]
     with admin_conn() as conn:
         row = conn.execute("""
             SELECT id, question, response, 1 - (embedding <=> %(v)s::vector) AS sim
@@ -39,9 +39,9 @@ def lookup(question: str, scope: str) -> dict | None:
 
 
 def store(question: str, scope: str, route: str, uses_live_data: bool, response: dict) -> None:
-    if not providers.embeddings_available():
+    qv = providers.embed_query(question)
+    if qv is None:
         return
-    qv = providers.embed([question], is_query=True)[0]
     ttl = config.CACHE_TTL_LIVE_S if uses_live_data else config.CACHE_TTL_DOCS_S
     with admin_conn() as conn:
         conn.execute("""

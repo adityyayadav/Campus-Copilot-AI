@@ -1,10 +1,8 @@
 """FastAPI backend.   Run:  uvicorn src.api:app --port 8000
 Serves the API under /api and the built React app (web/dist) at /."""
-import asyncio
 import json
 import queue
 import threading
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
@@ -14,13 +12,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, live
+from . import config, providers
 from .chunking import _front_matter
 from .db import admin_conn, pool_stats
-from .service import handle, metrics
+from .service import handle
 
 app = FastAPI(title="Campus Copilot AI", version="1.0.0")
-live.ensure_listener()  # each server process listens for live pipeline events from all workers
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
 
@@ -79,7 +76,9 @@ def health():
             "embeddings": {"provider": config.EMBED_PROVIDER, "dim": config.EMBED_DIM,
                            "configured": bool({"gemini": config.GOOGLE_API_KEY, "cohere": config.COHERE_API_KEY,
                                                "jina": config.JINA_API_KEY}.get(config.EMBED_PROVIDER))},
-            "reranker": config.RERANK_PROVIDER, "guard_model": config.GUARD_MODEL}
+            "reranker": config.RERANK_PROVIDER, "guard_model": config.GUARD_MODEL,
+            "embedding_status": providers.embeddings_status(),
+            "restart_needed": config.env_changed_since_start()}
 
 
 @app.get("/api/personas")
@@ -94,11 +93,6 @@ def personas():
     admin = {"student_id": "ADMIN", "role": "admin", "name": "Registrar Office", "dept_id": "ADMIN",
              "department": "Administration", "year": None, "gpa": None, "attendance_pct": None}
     return [admin] + students
-
-
-@app.get("/api/metrics")
-def get_metrics():
-    return metrics()
 
 
 @app.get("/api/documents/{name}")
@@ -144,18 +138,14 @@ def chat(req: ChatRequest, request: Request):
         return JSONResponse(status_code=503, headers={"Retry-After": "5"},
                             content={"detail": "The assistant is busy right now. Please try again in a few seconds."})
     q: queue.Queue = queue.Queue()
-    req_id = uuid.uuid4().hex[:8]
-    role = "admin" if req.student_id == "ADMIN" else "student" if req.student_id else "guest"
 
     def worker():  # runs on the bounded pool; per-request usage metering stays in this thread's context
         with _inflight_lock:
             _inflight["n"] += 1
         try:
-            live.request_started(req_id, req.question, req.student_id, role)
             for ev in handle(req.question, req.student_id, [t.model_dump() for t in req.history],
                              req.use_hyde, req.use_rerank, client):
                 q.put(ev)
-                live.publish(req_id, live.summarize(ev))  # broadcast to the live monitor
         finally:
             with _inflight_lock:
                 _inflight["n"] -= 1
@@ -169,37 +159,6 @@ def chat(req: ChatRequest, request: Request):
             yield f"data: {json.dumps(ev, default=str)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.get("/api/live")
-async def live_stream(request: Request):
-    """Server-Sent Events feed of every request's pipeline steps (developer console 'Live' tab).
-    Async + polling a per-subscriber buffer, so watchers never tie up the worker thread pool."""
-    live.ensure_listener()
-    sub = live.subscribe()
-    backlog = list(live.HISTORY)[-150:]
-
-    async def gen():
-        try:
-            yield "retry: 3000\n\n"
-            for ev in backlog:
-                yield f"data: {json.dumps({**ev, 'replay': True}, default=str)}\n\n"
-            idle = 0
-            while not await request.is_disconnected():
-                sent = False
-                while sub:
-                    yield f"data: {json.dumps(sub.popleft(), default=str)}\n\n"
-                    sent = True
-                idle = 0 if sent else idle + 1
-                if idle >= 60:  # ~15 s keep-alive comment so proxies keep the stream open
-                    idle = 0
-                    yield ": keep-alive\n\n"
-                await asyncio.sleep(0.25)
-        finally:
-            live.unsubscribe(sub)
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
@@ -228,6 +187,8 @@ if DIST.exists():
 
     @app.get("/{path:path}")
     def spa(path: str):
+        if path.startswith("api/"):  # unknown API routes are real 404s, not the app shell
+            return JSONResponse(status_code=404, content={"error": "not found"})
         f = DIST / path
         if path and f.is_file() and DIST in f.resolve().parents:
             return FileResponse(f)

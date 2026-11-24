@@ -1,72 +1,106 @@
-# 🎓 Campus Copilot AI: Unified Hybrid RAG
+# 🎓 Campus Copilot AI
 
-Ask one question; get one answer that merges the **live university database** (fees, grants, courses, exams) with
-**policy documents** (eligibility rules, fines, regulations), with exact figures, citations and a full audit trail.
+**Ask one question about your university and get one clear, verified answer.**
 
-**Stack:** React (Vite) · FastAPI (SSE streaming) · LangGraph · PostgreSQL 17 + pgvector (relational + vectors + BM25 in one DB)
-· Groq `gpt-oss-120b/20b` (Gemini fallback) · Gemini embeddings · Cohere Rerank · Llama Prompt Guard 2.
-Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+University information lives in two places: **records** (fee ledgers, courses, grants, exam schedules) and **policy
+documents** (rules, eligibility criteria, fines). Students usually have to check both and put the answer together
+themselves. Campus Copilot does that for them. It works out where the answer lives, looks it up, combines the two and
+shows exactly where every fact came from.
 
-## Prerequisites
-- Python 3.11+ (tested on 3.13) · Node 18+ · Docker Desktop (running)
-- Free API keys in `.env` (copy from `.env.example`): `GROQ_API_KEY`, `GOOGLE_API_KEY`, `COHERE_API_KEY`
+🎥 **Demo video:** _add link here_
+💻 **Code:** https://github.com/adityyayadav/Campus-Copilot-AI
+📊 **Slides:** [presentation/Campus-Copilot-AI.pptx](presentation/Campus-Copilot-AI.pptx)
 
-## First-time setup
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-docker compose up -d                                  # PostgreSQL + pgvector on localhost:5433
-.\.venv\Scripts\python.exe -m scripts.setup_db        # schema, seed data, read-only role, row-level security
-.\.venv\Scripts\python.exe -m scripts.ingest          # injection scan, chunk, embed, BM25 index (~3 min on free tier)
-cd web; npm install; npm run build; cd ..             # build the React UI
-```
+---
 
-## Run
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn src.api:app --port 8000
-```
-For more traffic, run several worker processes. The app is stateless and all shared state lives in PostgreSQL:
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn src.api:app --port 8000 --workers 4
-```
-- **http://localhost:8000/** is the student-facing assistant: a clean chat UI with conversation history, sources and an account switcher.
-- **http://localhost:8000/console** is the developer console: routing decisions, generated SQL, retrieved chunks with scores, guardrail and grounding results, cost, a **Live** tab that shows every question moving through the pipeline in real time, and the Insights dashboard.
-- Citations: click a numbered chip to open the source. PDF sources open in a resizable split screen, scrolled to the cited page with the lines highlighted.
+## What it can do
 
-For UI development with hot reload, also run `cd web; npm run dev` and open http://localhost:5173.
+- **Answers from records:** "How many seats are left in the Generative AI elective?"
+- **Answers from policies:** "What is the refund if I withdraw 20 days after the term starts?"
+- **Combines both:** "I'm a 3rd-year CSE student with GPA 3.8. Which research grants can I apply for, and by when?"
+- **Personal answers:** a signed-in student can ask "What fees do I still owe?" and sees only their own records.
+- **Shows its sources:** every answer has numbered citations. Clicking one opens the original document, or the PDF page
+  with the exact lines highlighted.
+- **Checks its numbers:** every figure in an answer is checked against the source before it is shown.
+- **Stays on topic:** it only answers university and student questions, and politely declines anything else (poems,
+  jokes, general trivia).
+- **Stays safe:** it blocks prompt-injection attempts and never shows one student's private data to another.
 
-## Demo accounts (role-based access, enforced in PostgreSQL)
-| Account | Can see |
+## How it works (in short)
+
+1. **Understand the question.** A two-step router decides whether it needs the database, the documents, or both.
+2. **Look it up.** It writes a safe, read-only database query and/or searches the policy documents.
+3. **Write the answer.** An AI model combines the evidence into a short answer with citations.
+4. **Verify.** Any number that can't be found in the evidence is fixed before the answer is sent.
+
+Repeated questions are answered instantly from a cache. If an AI service hits its free-tier limit, the app switches to a
+backup model or to keyword search, so it keeps answering.
+
+**Built with:** React · FastAPI · LangGraph · PostgreSQL + pgvector · Groq and Gemini (free-tier AI models) · Cohere Rerank
+
+## Run it locally
+
+You need **Python 3.11+**, **Node 18+** and **Docker Desktop** (running), plus free API keys from Groq, Google AI Studio
+and Cohere.
+
+1. Copy `.env.example` to `.env` and fill in `GROQ_API_KEY`, `GOOGLE_API_KEY` and `COHERE_API_KEY`.
+2. Set it up once:
+
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   docker compose up -d
+   .\.venv\Scripts\python.exe -m scripts.setup_db
+   .\.venv\Scripts\python.exe -m scripts.ingest
+   cd web; npm install; npm run build; cd ..
+   ```
+
+3. Start the app and open **http://localhost:8000**:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m uvicorn src.api:app --port 8000
+   ```
+
+If you change `.env`, restart the server.
+
+## Demo accounts
+
+Switch between them from the account menu in the app.
+
+| Account | What they can see |
 |---|---|
-| Registrar Office (admin) | Everything, including any student's fees and applications |
-| Aarav Sharma (S1023), Priya Kulkarni (S1045) | Public info plus **their own** records only |
-| Guest | Public information only (no personal rows) |
+| Registrar Office (admin) | Everything, including any student's records |
+| Aarav Sharma (S1023), Priya Kulkarni (S1045) | Public information plus **their own** records |
+| Guest | Public information only |
 
-Roles are applied per query through `app.role` / `app.student_id` and Postgres row-level security, plus the guardrail and SQL checks. In production they would come from the university SSO token, not an account switcher.
+Access is enforced inside the database itself, so even a tricked AI model can't read another student's data.
 
-## Adding documents
-Put Markdown (`.md`, with a `---` front-matter block) or PDF files in `data/docs/`. A PDF can have a sidecar
-`<name>.meta.json` with `topic`, `doc_type`, `owner`, `effective_from`. Then re-run `python -m scripts.ingest`.
+## Adding your own documents
 
-## Free-tier limits worth knowing
-Groq's free tier allows about 200K tokens per day for `gpt-oss-120b` (rolling 24 hours). When it runs out the app falls back
-to `gpt-oss-20b` and then Gemini automatically, which is slower but still answers. Avoid long test runs right before a demo,
-and ask the demo questions once beforehand: verified answers are cached (5 min for live data, 24 h for policy answers).
+Put Markdown or PDF policy files in `data/docs/`, then run
+`.\.venv\Scripts\python.exe -m scripts.ingest` again.
 
-## Evaluate
-```powershell
-.\.venv\Scripts\python.exe -m eval.run_eval          # routing: tier-1 vs LLM vs two-tier → eval/results.md
-.\.venv\Scripts\python.exe -m eval.run_eval --full   # + SQL success, grounding, latency, tokens
+## Project layout
+
+```
+src/            backend: API, router, search, database agent, answer checks
+web/            the chat app (React)
+data/           sample university data and policy documents
+scripts/        database setup and document ingestion
+eval/           routing accuracy tests
+docs/           architecture, routing evaluation, demo script, prompt log
+presentation/   final slides
 ```
 
-## API
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/chat` | `{question, student_id?, history?, use_rerank?, use_hyde?}` → Server-Sent Events: `guard`, `cache`, `step`, `final` / `blocked` / `error` |
-| GET | `/api/metrics` | latency p50/p95, cache hit rate, % routed without LLM, tokens, SQL success, guardrail blocks |
-| GET | `/api/health` | DB, index size, configured providers |
-| GET | `/api/personas` | demo student accounts |
+## Learn more
 
-## Notes
-- API keys live only in `.env` (git-ignored). The keys used during development were shared in chat, so rotate them before making the repo public.
-- Free-tier limits: Gemini embeddings allow 100 texts/min, so ingestion is paced. Groq `gpt-oss-120b` allows 8K tokens/min; on a 429 the app falls back to `gpt-oss-20b`, then to Gemini.
+- [Architecture](docs/ARCHITECTURE.md): how each part works, in detail
+- [Routing evaluation](docs/ROUTING_EVALUATION.md): how accurate the router is (94%)
+- [Demo script](docs/DEMO_SCRIPT.md): questions that show every feature
+- [Prompt log](docs/PROMPT_LOG.md): how the project was built with AI assistance
+
+## Good to know
+
+- API keys live only in `.env`, which is never committed.
+- The free tiers have daily limits. Before a demo, avoid long test runs and ask your demo questions once, so they are
+  cached and answer instantly.

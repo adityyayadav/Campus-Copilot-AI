@@ -76,11 +76,11 @@ def hybrid_search(query: str, collections: list[str], filters: dict | None = Non
     dense_query lets HyDE pass a hypothetical answer for the vector side while BM25 uses the real question."""
     filt = json.dumps(filters or {})
     timings = {}
-    qvec = None
-    if providers.embeddings_available():
-        t = time.time()
-        qvec = providers.embed([dense_query or query], is_query=True)[0]
-        timings["embed_ms"] = int((time.time() - t) * 1000)
+    t = time.time()
+    qvec = providers.embed_query(dense_query or query)  # None -> keyword (BM25) retrieval only
+    timings["embed_ms"] = int((time.time() - t) * 1000)
+    if qvec is None:
+        timings["dense_skipped"] = "embeddings unavailable"
 
     with admin_conn() as conn:
         t = time.time()

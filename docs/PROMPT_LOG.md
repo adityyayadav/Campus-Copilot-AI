@@ -84,6 +84,15 @@ Format per entry: **phase · tool/model · prompt · outcome / decision taken**.
   - Live monitor: PostgreSQL NOTIFY/LISTEN event bus + `/api/live` SSE + console "Live" tab showing each request's stages, timings, routing votes, sources, SQL and verification in real time (works across workers).
   - Verified: "Am I eligible to register for campus placements this year?" (S1023) → HYBRID · sequential, answer "No: placements need 4th year" cited to PDF page 1 with highlighted lines; the Live tab showed every stage as it ran.
 
+### P10: Reliability fixes, scope rule, console removed, final deck
+- **Prompts:** "it feels buggy and dont give answers i feel like its some llm api limit problem"; "the result doesnot scroll the rest of the answers and the 'write a poem on oceans' is still working"; "i dont need that dashboard so dump all that things"; "at last add my github and demo video place".
+- **Outcome:**
+  - Embedding quota errors now fail fast with a circuit breaker; retrieval falls back to keyword (BM25) search instead of hanging. `.env` is re-read with override, and `/api/health` reports when a restart is needed.
+  - Non-university tasks (poems, jokes, code, trivia) are declined by a fixed rule before any LLM call; the answer prompt also restricts scope.
+  - The chat follows long answers to the end while they stream.
+  - The developer console, live monitor and `/api/metrics` / `/api/live` were removed; only the student assistant remains.
+  - Final deck: GitHub link and demo-video placeholder added to the closing slide.
+
 ## Phase 2: Code Generation
 
 _(add entries as we go)_

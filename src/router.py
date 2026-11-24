@@ -9,6 +9,7 @@ Tier 2  LLM router (gpt-oss-20b, JSON): handles HYBRID decomposition (parallel v
 Fallback if the LLM fails or is unsure (< ROUTER_LLM_MIN_CONFIDENCE) we choose HYBRID/parallel, because
         querying both sources is the safe failure mode (costs more, never misses a source).
 """
+import re
 import time
 from collections import defaultdict
 from functools import lru_cache
@@ -34,11 +35,31 @@ def source_catalog() -> tuple[str, str, tuple[str, ...]]:
     return t, d, tuple(sorted({r["topic"] for r in docs if r["topic"]}))
 
 
+# Requests for non-university work are out of scope no matter what a model thinks, unless the message
+# also clearly asks about university matters ("write an essay" alone vs "essay submission deadline").
+OFF_TOPIC_TASK = re.compile(
+    r"\b(poem|poems|poetry|haiku|limerick|lyrics|song|songs|story|stories|essay|joke|jokes|riddle|rap|recipe|"
+    r"horoscope|weather|movie|movies|film|series|cricket|football|ipl|stock|stocks|bitcoin|crypto|"
+    r"translate|translation|capital of|president of|prime minister|"
+    r"(write|generate|create|debug|fix|explain)\b.{0,30}\b(code|function|script|program|python|java|javascript|c\+\+|html|css|regex))\b",
+    re.I)
+UNIVERSITY_HINT = re.compile(
+    r"\b(fee|fees|fine|fines|refund|grant|grants|scholarship|course|courses|exam|exams|hall ticket|hostel|gpa|cgpa|"
+    r"attendance|credit|credits|semester|term|timetable|placement|placements|internship|department|faculty|"
+    r"professor|student|students|enrol\w*|admission|revaluation|university|campus|library|syllabus|assignment|deadline)\b",
+    re.I)
+
+
+def is_off_topic_task(question: str) -> bool:
+    return bool(OFF_TOPIC_TASK.search(question)) and not UNIVERSITY_HINT.search(question)
+
+
 def knn_classify(question: str) -> dict:
     t = time.time()
-    if not providers.embeddings_available():
-        return {"label": None, "confidence": 0.0, "ms": 0, "neighbours": [], "disabled": "no embedding key"}
-    qv = providers.embed([question], is_query=True)[0]
+    qv = providers.embed_query(question)
+    if qv is None:
+        return {"label": None, "confidence": 0.0, "ms": int((time.time() - t) * 1000), "neighbours": [],
+                "disabled": "embeddings unavailable"}
     with admin_conn() as conn:
         rows = conn.execute("""
             SELECT metadata->>'label' AS label, content, 1 - (embedding <=> %s::vector) AS sim
@@ -81,6 +102,11 @@ def route(question: str, profile: dict | None = None, history: list[dict] | None
     {route, strategy, in_scope, standalone_question, sql_question, doc_question, doc_topic, confidence,
      tier: 'fast'|'llm'|'fallback', reasoning, fast: {...}, ms}"""
     t0 = time.time()
+    if is_off_topic_task(question):  # deterministic: no model can be talked into doing these
+        return {"route": "VECTOR_ONLY", "strategy": None, "in_scope": False, "standalone_question": question,
+                "sql_question": None, "doc_question": None, "doc_topic": None, "confidence": 1.0,
+                "tier": "rule", "reasoning": "non-university task (rule)", "fast": {},
+                "ms": int((time.time() - t0) * 1000)}
     _, _, topics = source_catalog()
     fast = knn_classify(question)
     base = {"standalone_question": question, "sql_question": None, "doc_question": None, "doc_topic": None,

@@ -15,12 +15,24 @@ from . import config
 _TIMEOUT = 60
 
 
+class QuotaExhausted(RuntimeError):
+    """A provider quota that will not reset within a request's lifetime (e.g. a daily limit)."""
+    def __init__(self, url: str, retry_after_s: float, detail: str):
+        super().__init__(f"{url} -> quota exhausted, resets in ~{int(retry_after_s)}s: {detail[:160]}")
+        self.retry_after_s = retry_after_s
+
+
+_MAX_WAIT_S = 70  # longer than this means a daily/long quota: retrying inside a request is pointless
+
+
 def _post(url: str, headers: dict, payload: dict, retries: int = 5) -> dict:
     for attempt in range(retries):
         r = requests.post(url, headers=headers, json=payload, timeout=_TIMEOUT)
         if r.status_code == 429 or r.status_code >= 500:
-            hint = re.search(r"retry in ([\d.]+)s", r.text)
+            hint = re.search(r"retry in ([\d.]+)s", r.text) or re.search(r'"retryDelay":\s*"([\d.]+)s"', r.text)
             wait = float(r.headers.get("retry-after") or (hint.group(1) if hint else 2 ** attempt * 3))
+            if r.status_code == 429 and (wait > _MAX_WAIT_S or "PerDay" in r.text):
+                raise QuotaExhausted(url, max(wait, 3600.0), r.text)
             time.sleep(min(wait + 1, 65))
             continue
         if not r.ok:
@@ -82,9 +94,35 @@ def _normalize(v: list[float]) -> list[float]:
 _EMBEDDERS = {"gemini": _gemini_embed, "cohere": _cohere_embed, "jina": _jina_embed}
 
 
+# Circuit breaker: after a quota failure, skip embedding calls until the quota resets so every question
+# degrades straight to keyword (BM25) retrieval and the LLM router instead of hanging on retries.
+_EMBED_DOWN = {"until": 0.0, "reason": ""}
+
+
 def embeddings_available() -> bool:
-    return bool({"gemini": config.GOOGLE_API_KEY, "cohere": config.COHERE_API_KEY,
-                 "jina": config.JINA_API_KEY}.get(config.EMBED_PROVIDER))
+    configured = bool({"gemini": config.GOOGLE_API_KEY, "cohere": config.COHERE_API_KEY,
+                       "jina": config.JINA_API_KEY}.get(config.EMBED_PROVIDER))
+    return configured and time.time() >= _EMBED_DOWN["until"]
+
+
+def embeddings_status() -> dict:
+    down = time.time() < _EMBED_DOWN["until"]
+    return {"available": embeddings_available(), "degraded": down,
+            "retry_in_s": int(_EMBED_DOWN["until"] - time.time()) if down else 0,
+            "reason": _EMBED_DOWN["reason"] if down else ""}
+
+
+def embed_query(text: str) -> list[float] | None:
+    """One query vector, or None when embeddings are unavailable (callers fall back to keyword search)."""
+    if not embeddings_available():
+        return None
+    try:
+        return embed([text], is_query=True)[0]
+    except QuotaExhausted as e:
+        _EMBED_DOWN.update(until=time.time() + e.retry_after_s, reason="daily quota exhausted")
+    except Exception as e:  # outage / repeated rate limits: back off briefly, keep answering
+        _EMBED_DOWN.update(until=time.time() + 120, reason=f"{type(e).__name__}: {str(e)[:120]}")
+    return None
 
 
 _QCACHE: "OrderedDict[str, list[float]]" = OrderedDict()

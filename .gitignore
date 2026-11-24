@@ -7,3 +7,4 @@ eval/results_*.json
 web/node_modules/
 web/dist/
 .claude
+.ui-backup-before-alive/

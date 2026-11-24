@@ -140,11 +140,33 @@ def synthesize_node(state: State) -> dict:
                                          "tokens": meta.get("tokens")}]}
 
 
+_EXAMPLES = ("You could ask, for example:\n"
+             "- *What is the refund if I withdraw 20 days after the term starts?*\n"
+             "- *Which research grants are open right now?*\n"
+             "- *What is the minimum attendance required to sit for exams?*")
+_GREETING = re.compile(r"^\s*(hi|hello|hey|hii+|good (morning|afternoon|evening)|namaste|yo)\b[\s!.,]*"
+                       r"(there|copilot)?[\s!.,]*$|\b(who are you|what can you (do|help)|how can you help|help me)\b", re.I)
+_THANKS = re.compile(r"^\s*(thanks|thank you|thx|ty|great|ok(ay)?|cool|got it|nice)\b[\s\w!.,]{0,30}$", re.I)
+_GREETING_REPLY = ("Hi! I'm Campus Copilot. I answer questions about the university: fees and fines, courses and "
+                   "timetables, exams, research grants, scholarships, placements, hostel rules and academic policies.\n\n"
+                   + _EXAMPLES)
+_THANKS_REPLY = "You're welcome! Ask me anything else about your courses, fees, exams or university policies."
+_DECLINE_REPLY = ("Sorry, I can only help with student and university matters: fees and fines, courses and "
+                  "timetables, exams, research grants, scholarships, placements, hostel rules and academic policies. "
+                  "If you meant a university question, try naming the course, department or policy.\n\n" + _EXAMPLES)
+
+
 def out_of_scope_node(state: State) -> dict:
-    answer, meta = chat(prompts.GENERAL_SYSTEM,
-                        f"History:\n{_history_str(state.get('history'))}\n\nUser: {state['question']}", role="router")
+    """Fixed replies, no LLM call: the assistant never does non-university tasks (poems, code, trivia...)."""
+    q = state["question"]
+    if _THANKS.search(q):
+        answer, kind = _THANKS_REPLY, "thanks"
+    elif _GREETING.search(q):
+        answer, kind = _GREETING_REPLY, "greeting"
+    else:
+        answer, kind = _DECLINE_REPLY, "declined"
     return {"answer": answer, "grounding": {"status": "n/a"},
-            "trace": [{"node": "out_of_scope", "ms": meta["ms"], "model": meta.get("model")}]}
+            "trace": [{"node": "out_of_scope", "ms": 0, "model": None, "output": {"reply": kind}}]}
 
 
 # ------------------------------------------------------------------ grounding (Self-RAG style verification)
