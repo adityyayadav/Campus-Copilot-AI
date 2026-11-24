@@ -7,7 +7,7 @@ documents** (rules, eligibility criteria, fines). Students usually have to check
 themselves. Campus Copilot does that for them. It works out where the answer lives, looks it up, combines the two and
 shows exactly where every fact came from.
 
-🎥 **Demo video:** _add link here_
+🎥 **Demo video:** https://www.youtube.com/watch?v=i7FYaQRh7Jk&feature=youtu.be
 💻 **Code:** https://github.com/adityyayadav/Campus-Copilot-AI
 📊 **Slides:** [presentation/Campus-Copilot-AI.pptx](presentation/Campus-Copilot-AI.pptx)
 
